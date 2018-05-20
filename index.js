@@ -1,152 +1,177 @@
-let request = require('request');
-var Client                = require('castv2-client').Client;
-var DefaultMediaReceiver  = require('castv2-client').DefaultMediaReceiver;
-var mdns                  = require('mdns');
+const cast_api = require('./cast-api');
+const debug = require('debug')('livemasjid-cast'); // export DEBUG=livemasjid-cast before running to get debug output
+const forEach = require('lodash.foreach');
+const axios = require('axios');
 
-let url = 'http://livemasjid.com:8000/status-json.xsl';
-let stream_mount = 'hma_furqaan';
-let stream = 'http://livemasjid.com:8000/' + stream_mount;
-let google_home_address;
-let media_player;
-let player_state;
-let loadMedia;
+// CONFIG
+let preferred_device = 'Bedroom speaker';
+let poll_url = 'http://livemasjid.com:8000/status-json.xsl';
+let poll_interval = 10*1000;
+let auto_unmute = true;
 
-var sequence = [
-    mdns.rst.DNSServiceResolve(),
-    'DNSServiceGetAddrInfo' in mdns.dns_sd ? mdns.rst.DNSServiceGetAddrInfo() : mdns.rst.getaddrinfo({families:[4]}),
-    mdns.rst.makeAddressesUnique()
+let streams = [
+    {
+        'name': 'hmjamaat',
+        'priority': 1
+    },
+    {
+        'name': 'hma_furqaan',
+        'priority': 2
+    }
 ];
-var browser = mdns.createBrowser(mdns.tcp('googlecast'), {resolverSequence: sequence});
 
-browser.on('serviceUp', function(service) {
-    console.log('found device "%s" at %s:%d', service.name, service.addresses[0], service.port);
-    google_home_address = service.addresses[0];
-    browser.stop();
+init_device().then(device => {
+    if (device !== undefined) {
+
+        loadStream(device.deviceAddress).catch(err => debug(err));
+        setInterval(loadStream.bind(null, device.deviceAddress), poll_interval);
+
+    } else {
+        debug('No devices available');
+    }
 });
 
-browser.start();
+async function init_device() {
 
-let pollDeviceID = setInterval(() => {
-    console.log(google_home_address);
-    pollStreams();
-    clearInterval(pollDeviceID);
-}, 1000);
+    let devices = JSON.parse(await cast_api.getDevices());
+    let selected_device;
 
-let MEDIA_PLAYER_NOT_INIT = 0;
-let MEDIA_PLAYER_ACTIVE = 1;
-let MEDIA_PLAYER_INACTIVE = 0;
-
-let getPlayerStatus = () => {
-
-    return new Promise((resolve, reject) => {
-
-        if (media_player === undefined) {
-            resolve(MEDIA_PLAYER_NOT_INIT);
+    // Default to first device
+    if (devices !== undefined && devices.length > 0) {
+        selected_device = devices[0];
+    }
+    // Select preferred device if available
+    forEach(devices, device => {
+        if (device['deviceFriendlyName'] === preferred_device) {
+            debug('Found preferred device: ' + preferred_device);
+            selected_device = device;
         }
+    });
 
-        media_player.getStatus((err, status) => {
-            if (err !== null) {
-                console.log(status);
-                resolve(MEDIA_PLAYER_ACTIVE);
+    return selected_device;
+}
+
+// Returns the URL and state of the currently playing stream. Returns undefined if none playing or error.
+async function getPlayerState(playbackAddress) {
+
+    // get device state
+    let status;
+    let media_status;
+    let current_url;
+    let player_state;
+    let muted;
+    try {
+        status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
+        muted = status.status.volume.muted;
+        let sessionId;
+        if (status !== undefined) {
+            sessionId = status['status']['applications'][0]['sessionId'];
+
+            media_status = JSON.parse(await cast_api.getMediaStatus(playbackAddress, sessionId));
+
+            current_url = media_status.status[0].media.contentId;
+            player_state = media_status.status[0].playerState;
+        }
+    } catch (e) {
+        // Expected behaviour when no stream playing
+        debug("No stream playing");
+    }
+    return {
+        current_url,
+        player_state,
+        muted
+    }
+
+}
+
+// Loads the highest priority stream available if its not already playing
+async function loadStream(playbackAddress) {
+    let player_state = await getPlayerState(playbackAddress);
+
+    let stream_to_load = await getStreamToLoad();
+
+    if (stream_to_load !== undefined) {
+        if (player_state.current_url === stream_to_load.listenurl && player_state.player_state === 'PLAYING') {
+            debug('Already playing requested stream - skipping')
+        } else {
+            // Load Stream
+
+            debug('Loading Stream: ' + stream_to_load.listenurl);
+
+            cast_api.setMediaPlayback(
+                playbackAddress,
+                stream_to_load.server_type,
+                stream_to_load.listenurl,
+                "LIVE",
+                stream_to_load.server_name,
+                stream_to_load.server_description,
+                "https://www.livemasjid.com/images/MasjidLogo.png",
+                true
+            )
+                .then(async response => {
+                    let  mediaSessionId = JSON.parse(response)['mediaSessionId'];
+
+                    try {
+                        let status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
+
+                        let sessionId;
+                        if (status !== undefined) {
+                            sessionId = status['status']['applications'][0]['sessionId'];
+
+                            cast_api.setMediaPlaybackPlay(playbackAddress, sessionId,mediaSessionId);
+
+                            // Auto Unmute if currently muted and config option set
+                            if (auto_unmute === true) {
+                                if (player_state.muted === true) {
+                                    cast_api.setDeviceMuted(playbackAddress, false);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        debug('Error: ' + e);
+                    }
+                });
+        }
+    } else {
+        debug('No stream found');
+    }
+    return true;
+}
+
+async function getStreamToLoad() {
+    let response;
+    let stream_to_load;
+
+    try {
+        response = await axios.get(poll_url).then(response => {
+
+            if (response.status === 200) {
+                return response.data;
             } else {
-                resolve(MEDIA_PLAYER_INACTIVE);
+                return undefined;
             }
-        })
-    })
-};
+        });
+    } catch (e) {
+        debug(e);
+    }
 
-let pollStreams = () => {
-      let pollStreamID = setInterval(() => {
+    if (response !== undefined) {
 
-          console.log(player_state || 'Player not started');
-          if (player_state === undefined || player_state === 'IDLE' || player_state === 'BUFFERING') {
+        forEach(response.icestats.source, availableStream => {
+            let source_url = availableStream.listenurl;
+            let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
 
-              request.get({
-                  url: url,
-                  json: true,
-                  headers: {'User-Agent': 'request'}
-              }, (err, res, data) => {
-                  if (err) {
-                      console.log('Error:', err);
-                  } else if (res.statusCode === 200) {
-                      // data is already parsed as JSON:
-                      data.icestats.source.forEach((source) => {
-                          let url  = source.listenurl.substr(source.listenurl.lastIndexOf("/") + 1);
-                          if (url === stream_mount) {
-                              console.log("Stream Found: " + stream_mount);
-                              ondeviceup(google_home_address);
-                          }
-                      });
-                  } else {
-                      console.log('Status:', res.statusCode);
-                  }
-              });
-
-          }
-
-
-      },10000);
-};
-
-
-
-function ondeviceup(host) {
-    console.log(host,2);
-    var client = new Client();
-
-    client.connect(host, function() {
-        console.log('connected, launching app ...');
-
-        client.launch(DefaultMediaReceiver, function(err, player) {
-            media_player = player;
-            var media = {
-
-                // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
-                contentId: stream,
-                contentType: 'audio/mpeg',
-                streamType: 'LIVE', // or LIVE
-
-                // // Title and cover displayed while buffering
-                // metadata: {
-                //     type: 0,
-                //     metadataType: 0,
-                //     title: "Big Buck Bunny",
-                //     images: [
-                //         { url: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg' }
-                //     ]
-                // }
-            };
-
-            player.on('status', function(status) {
-
-                if (status !== undefined) {
-                    player_state = status.playerState;
+            forEach(streams, stream => {
+                if (stream['name'] === stream_name) {
+                    if (stream_to_load === undefined || stream_to_load['priority'] > stream['priority']) {
+                        stream_to_load = Object.assign({}, availableStream);
+                        stream_to_load['priority'] = stream['priority'];
+                    }
                 }
-                // console.log('status broadcast playerState=%s', status.playerState);
             });
-
-            console.log('app "%s" launched, loading media %s ...', player.session.displayName, media.contentId);
-
-            player.load(media, { autoplay: true }, function(err, status) {
-                // console.log('media loaded playerState=%s', status.playerState);
-
-                //Seek to 2 minutes after 15 seconds playing.
-                // setTimeout(function() {
-                //     player.stop();
-                //     // player.seek(2*60, function(err, status) {
-                //     //     //
-                //     // });
-                // }, 15000);
-
-            });
-
         });
 
-    });
+    }
 
-    client.on('error', function(err) {
-        console.log('Error: %s', err.message);
-        client.close();
-    });
-
+    return stream_to_load;
 }

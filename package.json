@@ -1,6 +1,6 @@
 {
   "name": "livemasjidcast",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Cast a live masjid stream to a Google Cast Device such as the Google Home",
   "main": "index.js",
   "scripts": {
@@ -9,8 +9,10 @@
   "author": "Imtiaz Mangerah",
   "license": "ISC",
   "dependencies": {
+    "axios": "^0.18.0",
     "castv2-client": "^1.2.0",
-    "mdns": "^2.3.4",
-    "request": "^2.85.0"
+    "debug": "^3.1.0",
+    "lodash.foreach": "^4.5.0",
+    "mdns-js": "^1.0.1"
   }
 }
