@@ -108,29 +108,29 @@ async function loadStream(playbackAddress) {
                 "https://www.livemasjid.com/images/MasjidLogo.png",
                 true
             )
-                .then(async response => {
-                    let  mediaSessionId = JSON.parse(response)['mediaSessionId'];
+            .then(async response => {
+                let  mediaSessionId = JSON.parse(response)['mediaSessionId'];
 
-                    try {
-                        let status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
+                try {
+                    let status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
 
-                        let sessionId;
-                        if (status !== undefined) {
-                            sessionId = status['status']['applications'][0]['sessionId'];
+                    let sessionId;
+                    if (status !== undefined) {
+                        sessionId = status['status']['applications'][0]['sessionId'];
 
-                            cast_api.setMediaPlaybackPlay(playbackAddress, sessionId,mediaSessionId);
+                        cast_api.setMediaPlaybackPlay(playbackAddress, sessionId,mediaSessionId);
 
-                            // Auto Unmute if currently muted and config option set
-                            if (auto_unmute === true) {
-                                if (player_state.muted === true) {
-                                    cast_api.setDeviceMuted(playbackAddress, false);
-                                }
+                        // Auto Unmute if currently muted and config option set
+                        if (auto_unmute === true) {
+                            if (player_state.muted === true) {
+                                cast_api.setDeviceMuted(playbackAddress, false);
                             }
                         }
-                    } catch (e) {
-                        debug('Error: ' + e);
                     }
-                });
+                } catch (e) {
+                    debug('Error: ' + e);
+                }
+            });
         }
     } else {
         debug('No stream found');
