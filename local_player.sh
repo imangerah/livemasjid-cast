@@ -1,10 +1,10 @@
 #!/bin/sh
 echo "Live Masjid Player"
 
-# STREAM=http://livemasjid.com:8000/hma_furqaan
+STREAM=http://livemasjid.com:8000/hma_furqaan
 
 # 24/7 Test stream
-STREAM=http://livemasjid.com:8000/activestream
+# STREAM=http://livemasjid.com:8000/activestream
 
 # Test if mocp is installed
 if ! [ -x "$(command -v mocp)" ]; then
@@ -34,20 +34,41 @@ else
     fi
 fi
 
-# Get current status of stream
+
+last_stream_seconds=0
+count_stopped=0
 
 while :
 do
+    # Get current status of stream
+
     mocp -Q "%state" | grep -q 'PLAY'
 
     if [ $? -eq 0 ]; then
         echo "Stream already playing"
+
+        # Check if stream stopped
+
+        if [ $last_stream_seconds -eq $(mocp -Q "%cs") ]; then
+            count_stopped=$((count_stopped+1))
+            if [ $count_stopped -eq 3 ]; then
+                echo "Stopping Player"
+                mocp -s > /dev/null 2>&1
+            fi
+        else
+            count_stopped=0
+        fi
+
+        # Get current stream time
+        last_stream_seconds=$(mocp -Q "%cs")
         sleep 10
     else
         # Try and start stream
         echo "Attempting to start stream"
         mocp -p > /dev/null 2>&1
 
+        last_stream_seconds=0
+        count_stopped=0
         sleep 15
 
         mocp -Q "%state" | grep -q 'PLAY'
