@@ -6,8 +6,15 @@ const axios = require('axios');
 // CONFIG
 let preferred_device = 'Bedroom speaker';
 let poll_url = 'http://livemasjid.com:8000/status-json.xsl';
-let poll_interval = 10*1000;
+
+const MILLIS_IN_SECOND = 1000;
+const SECONDS_IN_MINUTE = 60;
+
+let poll_interval = 10*MILLIS_IN_SECOND;
+let mute_interlock_timeout = 15*SECONDS_IN_MINUTE*MILLIS_IN_SECOND;
+let mute_interlock_check_interval = SECONDS_IN_MINUTE*MILLIS_IN_SECOND;
 let auto_unmute = true;
+let use_mute_interlock = true;
 
 let streams = [
     {
@@ -20,8 +27,17 @@ let streams = [
     }
 ];
 
+// STATE VARIABLES
+let mute_interlock = false;
+let previous_player_state;
+
 init_device().then(device => {
     if (device !== undefined) {
+
+        if (use_mute_interlock) {
+            setInterlockWhenDeviceIsMuted(device.deviceAddress).catch(err => debug(err));
+            setInterval(setInterlockWhenDeviceIsMuted.bind(null, device.deviceAddress), mute_interlock_check_interval);
+        }
 
         loadStream(device.deviceAddress).catch(err => debug(err));
         setInterval(loadStream.bind(null, device.deviceAddress), poll_interval);
@@ -30,6 +46,29 @@ init_device().then(device => {
         debug('No devices available');
     }
 });
+
+async function setInterlockWhenDeviceIsMuted(playbackAddress) {
+    let player_state = await getPlayerState(playbackAddress);
+
+    let previously_muted;
+    try {
+        previously_muted = previous_player_state.muted;
+    } catch (e) {
+        previously_muted = false;
+    }
+
+    if (mute_interlock === false && previously_muted === false && player_state.muted === true) {
+
+        debug("Setting Mute Interlock");
+        mute_interlock = true;
+
+        setTimeout(() => {
+            mute_interlock = false;
+        }, mute_interlock_timeout);
+    }
+
+    previous_player_state = player_state;
+}
 
 async function init_device() {
 
@@ -120,8 +159,8 @@ async function loadStream(playbackAddress) {
 
                         cast_api.setMediaPlaybackPlay(playbackAddress, sessionId,mediaSessionId);
 
-                        // Auto Unmute if currently muted and config option set
-                        if (auto_unmute === true) {
+                        // Auto Unmute if currently muted and config option set and no mute interlock
+                        if (auto_unmute === true && mute_interlock === false) {
                             if (player_state.muted === true) {
                                 cast_api.setDeviceMuted(playbackAddress, false);
                             }
