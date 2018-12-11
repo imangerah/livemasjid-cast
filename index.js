@@ -2,6 +2,7 @@ const cast_api = require('./cast-api');
 const debug = require('debug')('livemasjid-cast'); // export DEBUG=livemasjid-cast before running to get debug output
 const forEach = require('lodash.foreach');
 const axios = require('axios');
+const mqtt = require('mqtt')
 
 // CONFIG
 let preferred_device = 'Bedroom speaker';
@@ -31,20 +32,37 @@ let streams = [
 let mute_interlock = false;
 let previous_player_state;
 
+async function handle_message(topic,message,device) {
+    if (message === 'started'){
+        loadStream(device.deviceAddress,streams.find(x => x.name === topic.split('/')[1]))
+    }
+}
+
+
 init_device().then(device => {
     if (device !== undefined) {
 
-        if (use_mute_interlock) {
-            setInterlockWhenDeviceIsMuted(device.deviceAddress).catch(err => debug(err));
-            setInterval(setInterlockWhenDeviceIsMuted.bind(null, device.deviceAddress), mute_interlock_check_interval);
-        }
-
-        loadStream(device.deviceAddress).catch(err => debug(err));
-        setInterval(loadStream.bind(null, device.deviceAddress), poll_interval);
-
-    } else {
-        debug('No devices available');
+    if (use_mute_interlock) {
+        setInterlockWhenDeviceIsMuted(device.deviceAddress).catch(err => debug(err));
+        setInterval(setInterlockWhenDeviceIsMuted.bind(null, device.deviceAddress), mute_interlock_check_interval);
     }
+
+    let client  = mqtt.connect('mqtt://livemasjid.com:1883');
+
+    client.on('connect', function () {
+        for (var i = 0; i < streams.length; i++) {
+            client.subscribe("mounts/" + streams[i].name, function (err) {});
+        }
+    });
+
+    client.on('message', function (topic, message) {
+        handle_message(topic,message.toString(),device);
+    })
+
+
+} else {
+    debug('No devices available');
+}
 });
 
 async function setInterlockWhenDeviceIsMuted(playbackAddress) {
@@ -64,7 +82,7 @@ async function setInterlockWhenDeviceIsMuted(playbackAddress) {
 
         setTimeout(() => {
             mute_interlock = false;
-        }, mute_interlock_timeout);
+    }, mute_interlock_timeout);
     }
 
     previous_player_state = player_state;
@@ -82,10 +100,10 @@ async function init_device() {
     // Select preferred device if available
     forEach(devices, device => {
         if (device['deviceFriendlyName'] === preferred_device) {
-            debug('Found preferred device: ' + preferred_device);
-            selected_device = device;
-        }
-    });
+        debug('Found preferred device: ' + preferred_device);
+        selected_device = device;
+    }
+});
 
     return selected_device;
 }
@@ -124,10 +142,10 @@ async function getPlayerState(playbackAddress) {
 }
 
 // Loads the highest priority stream available if its not already playing
-async function loadStream(playbackAddress) {
+async function loadStream(playbackAddress,currentStream) {
     let player_state = await getPlayerState(playbackAddress);
 
-    let stream_to_load = await getStreamToLoad();
+    let stream_to_load = await getStreamToLoad(currentStream);
 
     if (stream_to_load !== undefined) {
         if (player_state.current_url === stream_to_load.listenurl && player_state.player_state === 'PLAYING') {
@@ -147,7 +165,7 @@ async function loadStream(playbackAddress) {
                 "https://www.livemasjid.com/images/MasjidLogo.png",
                 true
             )
-            .then(async response => {
+                .then(async response => {
                 let  mediaSessionId = JSON.parse(response)['mediaSessionId'];
 
                 try {
@@ -177,7 +195,7 @@ async function loadStream(playbackAddress) {
     return true;
 }
 
-async function getStreamToLoad() {
+async function getStreamToLoad(currentStream) {
     let response;
     let stream_to_load;
 
@@ -185,11 +203,11 @@ async function getStreamToLoad() {
         response = await axios.get(poll_url).then(response => {
 
             if (response.status === 200) {
-                return response.data;
-            } else {
-                return undefined;
-            }
-        });
+            return response.data;
+        } else {
+            return undefined;
+        }
+    });
     } catch (e) {
         debug(e);
     }
@@ -198,17 +216,15 @@ async function getStreamToLoad() {
 
         forEach(response.icestats.source, availableStream => {
             let source_url = availableStream.listenurl;
-            let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
+        let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
 
-            forEach(streams, stream => {
-                if (stream['name'] === stream_name) {
-                    if (stream_to_load === undefined || stream_to_load['priority'] > stream['priority']) {
-                        stream_to_load = Object.assign({}, availableStream);
-                        stream_to_load['priority'] = stream['priority'];
-                    }
-                }
-            });
-        });
+        if (currentStream['name'] === stream_name) {
+            if (stream_to_load === undefined || stream_to_load['priority'] > currentStream['priority']) {
+                stream_to_load = Object.assign({}, availableStream);
+                stream_to_load['priority'] = currentStream['priority'];
+            }
+        }
+    });
 
     }
 
