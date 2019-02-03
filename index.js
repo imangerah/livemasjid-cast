@@ -11,12 +11,13 @@ let poll_url = 'http://livemasjid.com:8000/status-json.xsl';
 const MILLIS_IN_SECOND = 1000;
 const SECONDS_IN_MINUTE = 60;
 
-let stream_active = false;
-let poll_interval = 10 * MILLIS_IN_SECOND;
-let mute_interlock_timeout = 15 * SECONDS_IN_MINUTE * MILLIS_IN_SECOND;
-let mute_interlock_check_interval = SECONDS_IN_MINUTE * MILLIS_IN_SECOND;
+let poll_interval = 10*MILLIS_IN_SECOND;
+let mute_interlock_timeout = 15*SECONDS_IN_MINUTE*MILLIS_IN_SECOND;
+let mute_interlock_check_interval = SECONDS_IN_MINUTE*MILLIS_IN_SECOND;
 let auto_unmute = true;
 let use_mute_interlock = true;
+
+let stream_active = false;
 let use_stream_volume = true;
 let stream_volume = 0.25;
 let streams = [
@@ -127,7 +128,7 @@ async function setInterlockWhenDeviceIsMuted(playbackAddress) {
 
         setTimeout(() => {
             mute_interlock = false;
-        }, mute_interlock_timeout);
+    }, mute_interlock_timeout);
     }
 
     previous_player_state = player_state;
@@ -161,6 +162,13 @@ async function init_device() {
         }
     }
 
+    // Select preferred device if available
+    forEach(devices, device => {
+        if (device['deviceFriendlyName'] === preferred_device) {
+            debug('Found preferred device: ' + preferred_device);
+            selected_device = device;
+        }
+    });
 
     return selected_device;
 }
@@ -214,6 +222,7 @@ async function loadStream(playbackAddress, currentStream) {
         stream_active = true;
         pre_stream_volume = (player_state.volume.level || pre_stream_volume).toFixed(2);
     }
+
     let stream_to_load = await getStreamToLoad(currentStream);
 
     if (stream_to_load !== undefined) {
@@ -287,11 +296,11 @@ async function getStreamToLoad(currentStream) {
         response = await axios.get(poll_url).then(response => {
 
             if (response.status === 200) {
-                return response.data;
-            } else {
-                return undefined;
-            }
-        });
+            return response.data;
+        } else {
+            return undefined;
+        }
+    });
     } catch (e) {
         debug(e);
     }
@@ -300,7 +309,7 @@ async function getStreamToLoad(currentStream) {
 
         forEach(response.icestats.source, availableStream => {
             let source_url = availableStream.listenurl;
-            let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
+        let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
 
             if (currentStream['name'] === stream_name) {
                 if (stream_to_load === undefined || stream_to_load['priority'] > currentStream['priority']) {
@@ -309,7 +318,6 @@ async function getStreamToLoad(currentStream) {
                 }
             }
         });
-
     }
 
     return stream_to_load;
