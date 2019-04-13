@@ -1,0 +1,177 @@
+const cast_api = require('./cast-api');
+const debug = require('debug')('livemasjid-cast'); // export DEBUG=livemasjid-cast before running to get debug output
+const forEach = require('lodash.foreach');
+const axios = require('axios');
+
+// CONFIG
+let preferred_device = 'Living Room home';
+let poll_url = 'http://livemasjid.com:8000/status-json.xsl';
+let poll_interval = 10*1000;
+let auto_unmute = true;
+
+let streams = [
+    {
+        'name': 'hmjamaat',
+        'priority': 1
+    },
+    {
+        'name': 'hma_furqaan',
+        'priority': 2
+    }
+];
+
+init_device().then(device => {
+    if (device !== undefined) {
+
+        loadStream(device.deviceAddress).catch(err => debug(err));
+        setInterval(loadStream.bind(null, device.deviceAddress), poll_interval);
+
+    } else {
+        debug('No devices available');
+    }
+});
+
+async function init_device() {
+
+    let devices = JSON.parse(await cast_api.getDevices());
+    let selected_device;
+
+    // Default to first device
+    if (devices !== undefined && devices.length > 0) {
+        selected_device = devices[0];
+    }
+    // Select preferred device if available
+    forEach(devices, device => 
+        if (device['deviceFriendlyName'] === preferred_device) {
+            debug('Found preferred device: ' + preferred_device);
+            selected_device = device;
+        }
+    });
+
+    return selected_device;
+}
+
+// Returns the URL and state of the currently playing stream. Returns undefined if none playing or error.
+async function getPlayerState(playbackAddress) {
+
+    // get device state
+    let status;
+    let media_status;
+    let current_url;
+    let player_state;
+    let muted;
+    try {
+        status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
+        muted = status.status.volume.muted;
+        let sessionId;
+        if (status !== undefined) {
+            sessionId = status['status']['applications'][0]['sessionId'];
+
+            media_status = JSON.parse(await cast_api.getMediaStatus(playbackAddress, sessionId));
+
+            current_url = media_status.status[0].media.contentId;
+            player_state = media_status.status[0].playerState;
+        }
+    } catch (e) {
+        // Expected behaviour when no stream playing
+        debug("No stream playing");
+    }
+    return {
+        current_url,
+        player_state,
+        muted
+    }
+
+}
+
+// Loads the highest priority stream available if its not already playing
+async function loadStream(playbackAddress) {
+    let player_state = await getPlayerState(playbackAddress);
+
+    let stream_to_load = await getStreamToLoad();
+
+    if (stream_to_load !== undefined) {
+        if (player_state.current_url === stream_to_load.listenurl && player_state.player_state === 'PLAYING') {
+            debug('Already playing requested stream - skipping')
+        } else {
+            // Load Stream
+
+            debug('Loading Stream: ' + stream_to_load.listenurl);
+
+            cast_api.setMediaPlayback(
+                playbackAddress,
+                stream_to_load.server_type,
+                stream_to_load.listenurl,
+                "LIVE",
+                stream_to_load.server_name,
+                stream_to_load.server_description,
+                "https://www.livemasjid.com/images/MasjidLogo.png",
+                true
+            )
+                .then(async response => {
+                    let  mediaSessionId = JSON.parse(response)['mediaSessionId'];
+
+                    try {
+                        let status = JSON.parse(await cast_api.getDeviceStatus(playbackAddress));
+
+                        let sessionId;
+                        if (status !== undefined) {
+                            sessionId = status['status']['applications'][0]['sessionId'];
+
+                            cast_api.setMediaPlaybackPlay(playbackAddress, sessionId,mediaSessionId);
+
+                            // Auto Unmute if currently muted and config option set
+                            if (auto_unmute === true) {
+                                if (player_state.muted === true) {
+                                    cast_api.setDeviceMuted(playbackAddress, false);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        debug('Error: ' + e);
+                    }
+                });
+        }
+    } else {
+        debug('No stream found');
+    }
+    return true;
+}
+
+async function getStreamToLoad() {
+    let response;
+    let stream_to_load;
+
+    try {
+        response = await axios.get(poll_url).then(response => {
+
+            if (response.status === 200) {
+                return response.data;
+            } else {
+                return undefined;
+            }
+        });
+    } catch (e) {
+        debug(e);
+    }
+
+    if (response !== undefined) {
+
+        forEach(response.icestats.source, availableStream => {
+            let source_url = availableStream.listenurl;
+            let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
+
+            forEach(streams, stream => {
+                if (stream['name'] === stream_name) {
+                    if (stream_to_load === undefined || stream_to_load['priority'] > stream['priority']) {
+                        stream_to_load = Object.assign({}, availableStream);
+                        stream_to_load['priority'] = stream['priority'];
+                    }
+                }
+            });
+        });
+
+    }
+
+    return stream_to_load;
+}
