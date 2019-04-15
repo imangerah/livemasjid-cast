@@ -164,6 +164,7 @@ async function init_device() {
                 devices = null;
             }
             console.log(selected_device);
+
         }
     }
 
@@ -312,11 +313,11 @@ async function getStreamToLoad(currentStream) {
         response = await axios.get(poll_url).then(response => {
 
             if (response.status === 200) {
-                return response.data;
-            } else {
-                return undefined;
-            }
-        });
+            return response.data;
+        } else {
+            return undefined;
+        }
+    });
     } catch (e) {
         debug(e);
     }
