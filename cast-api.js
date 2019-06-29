@@ -8,17 +8,17 @@ const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
 const mdns = require('mdns-js');
 const debug = require('debug')('cast-api');
 
-var currentRequestId = 1;
+let currentRequestId = 1;
 const networkTimeout = 10000;
 const discoveryTimeout = 4000;
 const appLoadTimeout = 10000;
 
 //GOOGLE CAST FUNCTIONS
 async function getDevices() {
-    var updateCounter=0;
-    var devices = [];
-    var browser = mdns.createBrowser(mdns.tcp('googlecast'));
-    var exception;
+    let updateCounter = 0;
+    const devices = [];
+    const browser = mdns.createBrowser(mdns.tcp('googlecast'));
+    let exception;
 
     try {
         browser.on('ready', function(){
@@ -26,24 +26,27 @@ async function getDevices() {
         });
 
         browser.on('update', function(service){
-            try {
-                updateCounter++;
-                debug('update received, service: ' + JSON.stringify(service));
-                var currentDevice = {
-                    deviceName: getId(service.txt[0]),
-                    deviceFriendlyName: getFriendlyName(service.txt),
-                    deviceAddress: service.addresses[0],
-                    devicePort: service.port
+                if (service.txt){
+                    try {
+                        updateCounter++;
+                        debug('update received, service: ' + JSON.stringify(service));
+
+                        const currentDevice = {
+                            deviceName: getId(service.txt[0]),
+                            deviceFriendlyName: getFriendlyName(service.txt),
+                            deviceAddress: service.addresses[0],
+                            devicePort: service.port
+                        };
+                        if (!duplicateDevice(devices, currentDevice)&&service.type[0].name!=='googlezone') {
+                            devices.push(currentDevice);
+                            debug('Added device: '+ JSON.stringify(currentDevice));
+                        } else {
+                            debug('Duplicat or googlezone device: ' + JSON.stringify(currentDevice))
+                        }
+                    } catch (e) {
+                        console.error('Exception caught while processing service: ' + e);
+                    }
                 }
-                if (!duplicateDevice(devices, currentDevice)&&service.type[0].name!='googlezone') {
-                    devices.push(currentDevice);
-                    debug('Added device: '+ JSON.stringify(currentDevice));
-                } else {
-                    debug('Duplicat or googlezone device: ' + JSON.stringify(currentDevice))
-                }
-            } catch (e) {
-                console.error('Exception caught while prcessing service: ' + e);
-            }
         });
     } catch (e) {
         console.error('Exception caught: ' + e);
@@ -66,9 +69,9 @@ async function getDevices() {
 
 function getDeviceStatus(address) {
     return new Promise(resolve => {
-        var deviceStatus, connection, receiver, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let deviceStatus, connection, receiver, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         try {
             debug('getDeviceStatus addr: %a', address);
@@ -80,8 +83,8 @@ function getDeviceStatus(address) {
                 receiver.send({ type: 'GET_STATUS', requestId: corrRequestId });
 
                 receiver.on('message', function(data, broadcast) {
-                    if(data.type == 'RECEIVER_STATUS') {
-                        if (data.requestId==corrRequestId) {
+                    if(data.type === 'RECEIVER_STATUS') {
+                        if (data.requestId === corrRequestId) {
                             deviceStatus = data;
                             debug('getDeviceStatus recv: %s', JSON.stringify(deviceStatus));
                             resolve(JSON.stringify(deviceStatus));
@@ -90,11 +93,15 @@ function getDeviceStatus(address) {
                 });
             });
             client.on('error', function(err) {
+                console.log(11);
+
                 handleException(err);
                 closeClientConnection(client, connection);
                 resolve(null);
             });
         } catch (e) {
+            console.log(12);
+
             handleException(e);
             closeClientConnection(client, connection);
             resolve(null);
@@ -109,39 +116,47 @@ function getDeviceStatus(address) {
 
 function setDeviceVolume(address, volume) {
     return new Promise(resolve => {
-        var deviceStatus, connection, receiver, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let deviceStatus, connection, receiver, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
-        debug('setDeviceVolume addr: %s', address, 'volu:', volume);
-        try {
-            client.connect(parseAddress(address), function() {
-                connection = client.createChannel('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.tp.connection', 'JSON');
-                receiver   = client.createChannel('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.receiver', 'JSON');
 
-                connection.send({ type: 'CONNECT' });
-                receiver.send({ type: 'SET_VOLUME', volume: { level: volume }, requestId: corrRequestId });
+        if (address && volume){
+            debug('setDeviceVolume addr: %s', address, 'volu:', volume);
 
-                receiver.on('message', function(data, broadcast) {
-                    if (data.requestId==corrRequestId) {
-                        if(data.type == 'RECEIVER_STATUS') {
-                            deviceStatus = data;
-                            debug('setDeviceVolume recv: %s', JSON.stringify(deviceStatus));
-                            resolve(JSON.stringify(deviceStatus));
+            try {
+                client.connect(parseAddress(address), function() {
+                    connection = client.createChannel('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.tp.connection', 'JSON');
+                    receiver   = client.createChannel('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.receiver', 'JSON');
+
+                    connection.send({ type: 'CONNECT' });
+                    receiver.send({ type: 'SET_VOLUME', volume: { level: volume }, requestId: corrRequestId });
+
+                    receiver.on('message', function(data, broadcast) {
+                        if (data.requestId === corrRequestId) {
+                            if(data.type === 'RECEIVER_STATUS') {
+                                deviceStatus = data;
+                                debug('setDeviceVolume recv: %s', JSON.stringify(deviceStatus));
+                                resolve(JSON.stringify(deviceStatus));
+                            }
                         }
-                    }
+                    });
                 });
-            });
 
-            client.on('error', function(err) {
+                client.on('error', function(err) {
+                    console.log(13);
+
+                    handleException(err);
+                    closeClientConnection(client, connection);
+                    resolve(null);
+                });
+            } catch (e) {
+                console.log(14);
+
                 handleException(err);
                 closeClientConnection(client, connection);
                 resolve(null);
-            });
-        } catch (e) {
-            handleException(err);
-            closeClientConnection(client, connection);
-            resolve(null);
+            }
         }
 
         setTimeout(() => {
@@ -153,9 +168,9 @@ function setDeviceVolume(address, volume) {
 
 function setDeviceMuted(address, muted) { //TODO: Add param error if not boolean
     return new Promise(resolve => {
-        var deviceStatus, connection, receiver, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let deviceStatus, connection, receiver, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         debug('setDeviceMuted addr: %s', address, 'muted:', muted);
         try {
@@ -167,8 +182,8 @@ function setDeviceMuted(address, muted) { //TODO: Add param error if not boolean
                 receiver.send({ type: 'SET_VOLUME', volume: { muted: muted }, requestId: corrRequestId });
 
                 receiver.on('message', function(data, broadcast) {
-                    if(data.type == 'RECEIVER_STATUS') {
-                        if (data.requestId==corrRequestId) {
+                    if(data.type === 'RECEIVER_STATUS') {
+                        if (data.requestId === corrRequestId) {
                             deviceStatus = data;
                             debug('setDeviceMuted recv: %s', JSON.stringify(deviceStatus));
                             resolve(JSON.stringify(deviceStatus));
@@ -177,11 +192,15 @@ function setDeviceMuted(address, muted) { //TODO: Add param error if not boolean
                 });
             });
             client.on('error', function(err) {
+                console.log(15);
+
                 handleException(err);
                 closeClientConnection(client, connection);
                 resolve(null);
             });
         } catch (e) {
+            console.log(16);
+
             handleException(err);
             closeClientConnection(client, connection);
             resolve(null);
@@ -196,9 +215,9 @@ function setDeviceMuted(address, muted) { //TODO: Add param error if not boolean
 
 function getMediaStatus(address, sessionId) {
     return new Promise(resolve => {
-        var mediaStatus, connection, receiver, media, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let mediaStatus, connection, receiver, media, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         debug('getMediaStatus addr: %s', address, 'seId:', sessionId);
         try {
@@ -210,8 +229,8 @@ function getMediaStatus(address, sessionId) {
                 media.send({ type: 'GET_STATUS', requestId: corrRequestId });
 
                 media.on('message', function(data, broadcast) {
-                    if(data.type == 'MEDIA_STATUS') {
-                        if (data.requestId==corrRequestId) {
+                    if(data.type === 'MEDIA_STATUS') {
+                        if (data.requestId === corrRequestId) {
                             mediaStatus = data;
                             debug('getMediaStatus recv: %s', JSON.stringify(mediaStatus));
                             resolve(JSON.stringify(mediaStatus));
@@ -221,11 +240,15 @@ function getMediaStatus(address, sessionId) {
             });
 
             client.on('error', function(err) {
+                console.log(17);
+
                 handleException(err);
                 closeClient(client);
                 resolve(null);
             });
         } catch (e) {
+            console.log(18);
+
             handleException(err);
             closeClient(client);
             resolve(null);
@@ -240,9 +263,9 @@ function getMediaStatus(address, sessionId) {
 
 function setMediaPlaybackPause(address, sId, mediaSId) {
     return new Promise(resolve => {
-        var mediaStatus, connection, receiver, media, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let mediaStatus, connection, receiver, media, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         debug('setMediaPlaybackPause addr: %s', address, 'seId:', sId, 'mSId:', mediaSId);
         try {
@@ -254,9 +277,9 @@ function setMediaPlaybackPause(address, sId, mediaSId) {
                 media.send({ type: 'PAUSE', requestId: corrRequestId, mediaSessionId: mediaSId, sessionId: sId });
 
                 media.on('message', function(data, broadcast) {
-                    if(data.type == 'MEDIA_STATUS') {
-                        if (data.requestId==corrRequestId||data.requestId==0) {
-                            if (data.status[0].playerState=="PAUSED") {
+                    if(data.type === 'MEDIA_STATUS') {
+                        if (data.requestId===corrRequestId||data.requestId===0) {
+                            if (data.status[0].playerState==="PAUSED") {
                                 mediaStatus = data;
                                 debug('setMediaPlaybackPause recv: %s', JSON.stringify(mediaStatus));
                                 resolve(JSON.stringify(mediaStatus));
@@ -272,6 +295,7 @@ function setMediaPlaybackPause(address, sId, mediaSId) {
                 resolve(null);
             });
         } catch (e) {
+            console.log(1);
             handleException(err);
             closeClient(client);
             resolve(null);
@@ -285,9 +309,9 @@ function setMediaPlaybackPause(address, sId, mediaSId) {
 
 function setMediaPlaybackPlay(address, sId, mediaSId) {
     return new Promise(resolve => {
-        var mediaStatus, connection, receiver, media, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let mediaStatus, connection, receiver, media, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         debug('setMediaPlaybackPlay addr: %s', address, 'seId:', sId, 'mSId:', mediaSId);
         try {
@@ -299,9 +323,9 @@ function setMediaPlaybackPlay(address, sId, mediaSId) {
                 media.send({ type: 'PLAY', requestId: corrRequestId, mediaSessionId: mediaSId, sessionId: sId });
 
                 media.on('message', function(data, broadcast) {
-                    if(data.type == 'MEDIA_STATUS') {
-                        if (data.requestId==corrRequestId||data.requestId==0) { //FIX for TuneIn's broken receiver app which always returns with requestId 0
-                            if (data.status[0].playerState=="PLAYING") {
+                    if(data.type === 'MEDIA_STATUS') {
+                        if (data.requestId===corrRequestId||data.requestId===0) { //FIX for TuneIn's broken receiver app which always returns with requestId 0
+                            if (data.status[0].playerState==="PLAYING") {
                                 mediaStatus = data;
                                 debug('setMediaPlaybackPlay recv: %s', JSON.stringify(mediaStatus));
                                 resolve(JSON.stringify(mediaStatus));
@@ -312,11 +336,15 @@ function setMediaPlaybackPlay(address, sId, mediaSId) {
             });
 
             client.on('error', function(err) {
+                console.log(2);
+
                 handleException(err);
                 closeClient(client);
                 resolve(null);
             });
         } catch (e) {
+            console.log(3);
+
             handleException(err);
             closeClient(client);
             resolve(null);
@@ -330,9 +358,9 @@ function setMediaPlaybackPlay(address, sId, mediaSId) {
 
 function setDevicePlaybackStop(address, sId) {
     return new Promise(resolve => {
-        var deviceStatus, connection, receiver, exception;
-        var client = new Client();
-        var corrRequestId = getNewRequestId();
+        let deviceStatus, connection, receiver, exception;
+        const client = new Client();
+        const corrRequestId = getNewRequestId();
 
         debug('setDevicePlaybackStop addr: %s', address, 'seId:', sId);
         try {
@@ -344,8 +372,8 @@ function setDevicePlaybackStop(address, sId) {
                 receiver.send({ type: 'STOP', sessionId: sId, requestId: corrRequestId });
 
                 receiver.on('message', function(data, broadcast) {
-                    if(data.type == 'RECEIVER_STATUS') {
-                        if (data.requestId==corrRequestId) {
+                    if(data.type === 'RECEIVER_STATUS') {
+                        if (data.requestId===corrRequestId) {
                             deviceStatus = data;
                             debug('setDevicePlaybackStop recv: %s', JSON.stringify(deviceStatus));
                             resolve(JSON.stringify(deviceStatus));
@@ -355,11 +383,15 @@ function setDevicePlaybackStop(address, sId) {
             });
 
             client.on('error', function(err) {
+                console.log(4);
+
                 handleException(err);
                 closeClientConnection(client, connection);
                 resolve(null);
             });
         } catch (e) {
+            console.log(5);
+
             handleException(err);
             closeClientConnection(client, connection);
             resolve(null);
@@ -373,11 +405,11 @@ function setDevicePlaybackStop(address, sId) {
 
 function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTitle, mediaSubtitle, mediaImageUrl, short) {
     return new Promise(resolve => {
-        var castv2Client = new Castv2Client();
+        const castv2Client = new Castv2Client();
 
         castv2Client.connect(parseAddress(address), function() {
             castv2Client.launch(DefaultMediaReceiver, function(err, player) {
-                var media = {
+                const media = {
                     contentId: mediaUrl,
                     contentType: mediaType,
                     streamType: mediaStreamType,
@@ -388,32 +420,40 @@ function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTi
                         title: mediaTitle,
                         subtitle: mediaSubtitle,
                         images: [
-                            { url: mediaImageUrl }
+                            {url: mediaImageUrl}
                         ]
                     }
                 };
 
                 player.load(media, { autoplay: true }, function(err, status) {
-                    try{
-                        debug('Media loaded playerState: ', status.playerState);
-                        if (short==true) {
-                            mediaStatus = JSON.stringify(status);
-                            resolve(mediaStatus);
-                        }
-                    } catch(e){
-                        handleException(e);
+                    if(err){
+                        console.log(err);
                         try{player.close();}catch(e){handleException(e);}
+                    }
+                    else{
+                        try{
+                            debug('Media loaded playerState: ', status.playerState);
+                            if (short===true) {
+                                let mediaStatus = JSON.stringify(status);
+                                resolve(mediaStatus);
+                            }
+                        } catch(e){
+                            console.log(6);
+
+                            handleException(e);
+                            try{player.close();}catch(e){handleException(e);}
+                        }
                     }
                 });
 
                 player.on('status', function(status) {
                     if (status) {
                         debug('status.playerState: ', status.playerState);
-                        if (status.playerState=='PLAYING') {
+                        if (status.playerState==='PLAYING') {
                             debug('status.playerState is PLAYING');
                             if (player.session.sessionId) {
                                 // console.log('Player has sessionId: ', player.session.sessionId);
-                                if (short==false) {
+                                if (short===false) {
                                     getMediaStatus(address, player.session.sessionId).then(mediaStatus => {
                                         debug('getMediaStatus return value: ', mediaStatus);
                                         resolve(mediaStatus);
@@ -433,6 +473,8 @@ function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTi
         });
 
         castv2Client.on('error', function(err) {
+            console.log(7);
+
             handleException(err);
             try{castv2Client.close();}catch(e){handleException(e);}
             resolve(null);
@@ -441,9 +483,9 @@ function setMediaPlayback(address, mediaType, mediaUrl, mediaStreamType, mediaTi
 }
 
 function duplicateDevice(devices, device) {
-    if (device.deviceName && device.deviceName!=null && devices && devices!=null) {
-        for (var i = 0; i < devices.length; i++) {
-            if(devices[i].deviceName == device.deviceName) {
+    if (device.deviceName && devices ) {
+        for (let i = 0; i < devices.length; i++) {
+            if(devices[i].deviceName === device.deviceName) {
                 return true;
             }
         }
@@ -456,11 +498,12 @@ function getFriendlyName(serviceTxt) {
         debug('service.txt is missing');
         return;
     }
-    var fns = serviceTxt.filter(function (txt) {
-        return txt.match(/fn=*/)!=null;
+    const fns = serviceTxt.filter(function (txt) {
+        return txt.match(/fn=*/) != null;
     });
+    let fn = "";
     if (fns.length>0) {
-        var fn=fns[0];
+        fn=fns[0];
         debug('Is friendly name: ' + fn);
         return (fn.replace(/fn=*/, ''));
     } else {
@@ -469,7 +512,7 @@ function getFriendlyName(serviceTxt) {
 }
 
 function getId(id) {
-    if (id&&id!=null&&id.match(/id=*/)!=null) {
+    if (id && id.match(/id=*/)!=null) {
         debug('Is id: ' + id);
         return (id.replace(/id=*/, ''));
     } else {
@@ -478,8 +521,8 @@ function getId(id) {
 }
 
 function parseAddress(address){
-    ip=address.split(':')[0];
-    port=address.split(':')[1];
+    let ip=address.split(':')[0];
+    let port=address.split(':')[1];
 
     if (!port) {
         port = 8009;
@@ -498,7 +541,7 @@ function getNewRequestId(){
         currentRequestId=1;
         debug("Rest currentRequestId");
     }
-    debug("getNewRequestId: "+(currentRequestId+1))
+    debug("getNewRequestId: "+(currentRequestId+1));
     return currentRequestId++;
 }
 
@@ -512,6 +555,8 @@ function closeConnection(connection) {
     try {
         connection.send({ type: 'CLOSE' });
     } catch (e) {
+        console.log(8);
+
         handleException(e);
     }
 }
@@ -521,6 +566,8 @@ function closeClient(client) {
     try {
         client.close();
     } catch (e) {
+        console.log(10);
+
         handleException(e);
     }
 }
@@ -539,4 +586,4 @@ module.exports = {
     setMediaPlaybackPlay,
     setDevicePlaybackStop,
     setMediaPlayback
-}
+};
