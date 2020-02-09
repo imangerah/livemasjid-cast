@@ -5,7 +5,8 @@ const axios = require('axios');
 const mqtt = require('mqtt');
 
 // CONFIG
-let preferred_device = 'Living Room home';
+let preferred_device = 'Living Room speakers';
+let restricted_devices = ['Bedside Hub'];
 let poll_url = 'http://livemasjid.com:8000/status-json.xsl';
 
 const MILLIS_IN_SECOND = 1000;
@@ -28,15 +29,14 @@ let streams = [
         'name': 'greensidemasjid', //greensidemasjid
         'priority': 2
     },
-    {
-        'name': 'isipingobeachmasjid', //isipingobeachmasjid
-        'priority': 1
-    }
-    
-   // {
-   //     'name': 'hma',
-   //     'priority': 4
-   // }
+//    {
+//        'name': 'isipingobeachmasjid', //isipingobeachmasjid
+//        'priority': 1
+//    },
+//    {
+//        'name': 'hma',
+//        'priority': 4
+//    }
 ];
 
 // STATE VARIABLES
@@ -45,9 +45,55 @@ let previous_player_state;
 let pre_stream_volume = 0.8;
 let active_stream = "";
 
+let time_debug = function(...args) {
+    console.log(new Date().toISOString() + ": ", ...args)
+}
+
+async function init_device() {
+
+    let devices = null;
+    let selected_device;
+    while (!devices){
+        time_debug('Searching for devices');
+        devices = JSON.parse(await cast_api.getDevices());
+        if (devices){
+            // Default to first device
+            if (devices[0]['deviceFriendlyName'] !== undefined){
+                if (restricted_devices.indexOf(devices[0]['deviceFriendlyName']) === -1){
+			selected_device = devices[0];
+		}
+            }
+            // Select preferred device if available
+            forEach(devices, device => {
+                if (device['deviceFriendlyName'] !== undefined){
+                    time_debug(device['deviceFriendlyName']);
+                    if (device['deviceFriendlyName'] === preferred_device) {
+                        time_debug('Found preferred device: ' + preferred_device);
+                        selected_device = device;
+                    }
+                }
+            });
+            if (!selected_device){
+                devices = null;
+            }
+        }
+    }
+
+    time_debug('Device selected: ' + selected_device['deviceFriendlyName']);
+
+    return selected_device;
+}
+
+
+function setVolumeToPreStreamLevel(device,player_state) {
+    if ((player_state.volume.level.toFixed(2) === stream_volume.toFixed(2)) && (use_stream_volume === true)) {
+        cast_api.setDeviceVolume(device.deviceAddress, pre_stream_volume);
+    }
+}
+
 
 async function handle_message(topic, message, device) {
-    console.log(topic,':',message);
+    time_debug(topic,':',message);
     if (message === 'started') {
         loadStream(device.deviceAddress, streams.find(x => x.name === topic.split('/')[1]))
     } else {
@@ -57,63 +103,27 @@ async function handle_message(topic, message, device) {
                 let current_stream_name = player_state.current_url.substr(player_state.current_url.lastIndexOf("/") + 1);
                 if (topic.split('/')[1] === active_stream) {
                     stream_active = false;
-                    console.log(active_stream, ' has ended');
+                    time_debug(active_stream, ' has ended');
                     active_stream = "";
                     cast_api.setDevicePlaybackStop(device.deviceAddress, player_state.sessionId);
 
-                    if ((player_state.volume.level.toFixed(2) === stream_volume.toFixed(2)) && (use_stream_volume === true)) {
-                        cast_api.setDeviceVolume(device.deviceAddress, pre_stream_volume);
-                    }
+                    setVolumeToPreStreamLevel(device,player_state);
                 }
             } else {
                 if (player_state !== undefined && player_state !== null) {
-                    if ((player_state.volume.level.toFixed(2) === stream_volume.toFixed(2)) && (use_stream_volume === true)) {
-                        cast_api.setDeviceVolume(device.deviceAddress, pre_stream_volume);
-                    }
+                    setVolumeToPreStreamLevel(device,player_state);
                 } else {
 
-                    console.log('invalid player state');
+                    time_debug('invalid player state');
                 }
             }
         } catch (e) {
-            console.log('failed to re-adjust volume');
-            console.log(e);
-            debug(e);
+            time_debug('failed to re-adjust volume', e);
         }
 
     }
 }
 
-
-init_device().then(device => {
-    if (device !== undefined) {
-
-        if (use_mute_interlock) {
-            setInterlockWhenDeviceIsMuted(device.deviceAddress).catch(err => debug(err));
-            setInterval(setInterlockWhenDeviceIsMuted.bind(null, device.deviceAddress), mute_interlock_check_interval);
-        }
-
-        let client = mqtt.connect('mqtt://livemasjid.com:1883');
-
-        client.on('connect', function () {
-            for (let i = 0; i < streams.length; i++) {
-                client.subscribe("mounts/" + streams[i].name, function (err) {
-                });
-            }
-        });
-
-        client.on('message', function (topic, message) {
-            handle_message(topic, message.toString(), device);
-        })
-
-
-    } else {
-        console.log('no devices available')
-        debug('No devices available');
-    }
-}).catch((e) => {
-    console.log('error',e)
-});
 
 async function setInterlockWhenDeviceIsMuted(playbackAddress) {
     let player_state = await getPlayerState(playbackAddress);
@@ -127,7 +137,7 @@ async function setInterlockWhenDeviceIsMuted(playbackAddress) {
 
     if (mute_interlock === false && previously_muted === false && player_state.muted === true) {
 
-        debug("Setting Mute Interlock");
+        time_debug("Setting Mute Interlock");
         mute_interlock = true;
 
         setTimeout(() => {
@@ -138,39 +148,7 @@ async function setInterlockWhenDeviceIsMuted(playbackAddress) {
     previous_player_state = player_state;
 }
 
-async function init_device() {
 
-    let devices = null;
-    let selected_device;
-    while (!devices){
-        console.log('Searching for devices');
-        devices = JSON.parse(await cast_api.getDevices());
-        if (devices){
-            // Default to first device
-            if (devices[0]['deviceFriendlyName'] !== undefined){
-                selected_device = devices[0];
-            }
-            // Select preferred device if available
-            forEach(devices, device => {
-                if (device['deviceFriendlyName'] !== undefined){
-                    console.log(device['deviceFriendlyName']);
-                    if (device['deviceFriendlyName'] === preferred_device) {
-                        debug('Found preferred device: ' + preferred_device);
-                        selected_device = device;
-                    }
-                }
-            });
-            if (!selected_device){
-                devices = null;
-            }
-            console.log(selected_device);
-
-        }
-    }
-
-
-    return selected_device;
-}
 
 // Returns the URL and state of the currently playing stream. Returns undefined if none playing or error.
 async function getPlayerState(playbackAddress) {
@@ -202,7 +180,7 @@ async function getPlayerState(playbackAddress) {
         }
     } catch (e) {
         // Expected behaviour when no stream playing
-        debug("No stream playing");
+        time_debug("No stream playing");
     }
     return {
         sessionId,
@@ -214,41 +192,51 @@ async function getPlayerState(playbackAddress) {
 
 }
 
-// Loads the highest priority stream available if its not already playing
-async function loadStream(playbackAddress, currentStream) {
-    let player_state = await getPlayerState(playbackAddress);
-    let stream_to_load
-    
-    console.log('currently playing: ',player_state.current_url);
-    console.log('new stream requested: ',currentStream['name']);
-    
+async function getPriorityStream(player_state, currentStream) {
+    time_debug('get Priority Stream')
+    let stream_to_load = undefined;
+
+    time_debug('Currently playing: ', stream_active,player_state.current_url);
+
     if (stream_active === false || !player_state.current_url) {
-	    console.log('no stream playing, can start new stream');
+        time_debug('no stream playing, can start new stream');
         stream_active = true;
         pre_stream_volume = (player_state.volume.level || pre_stream_volume).toFixed(2);
         stream_to_load = await getStreamToLoad(currentStream);
     }
     else{
-        console.log("current stream priority: ",streams.find(x => x.name === player_state.current_url.lastIndexOf("/") + 1)['priority']);
-        console.log("new stream priority: ",currentStream['priority'])
-    	if(streams.find(x => x.name === player_state.current_url.lastIndexOf("/") + 1)['priority'] > currentStream['priority']){
-
-    		stream_to_load = await getStreamToLoad(currentStream);
-	    }
-	    else{
-            console.log('higher priority stream playing');
-		    stream_to_load = undefined;
-	    }
+        let current_stream_name = player_state.current_url.substr(player_state.current_url.lastIndexOf("/") + 1,player_state.current_url.length);
+        time_debug("current stream priority: ",streams.find(x => x.name === current_stream_name)['priority']);
+        time_debug("new stream priority: ",currentStream['priority'])
+        if(streams.find(x => x.name === current_stream_name)['priority'] < currentStream['priority']){
+            stream_to_load = await getStreamToLoad(currentStream);
+        }
+        else{
+            time_debug('higher priority stream playing');
+            stream_to_load = undefined;
+        }
     }
-    // let stream_to_load = await getStreamToLoad(currentStream);
+    //time_debug(stream_to_load)
+    return stream_to_load
+}
+
+// Loads the highest priority stream available if its not already playing
+async function loadStream(playbackAddress, currentStream) {
+    let player_state = await getPlayerState(playbackAddress);
+    
+    time_debug('currently playing: ',player_state.current_url);
+    time_debug('new stream requested: ',currentStream['name']);
+    
+    let stream_to_load = await getPriorityStream(player_state, currentStream);
+
+    time_debug("Load stream: ", stream_to_load['server_name'])
 
     if (stream_to_load !== undefined) {
         if (player_state.current_url === stream_to_load.listenurl && player_state.player_state === 'PLAYING') {
-            debug('Already playing requested stream - skipping')
+            time_debug('Already playing requested stream - skipping')
         } else {
             // Load Stream
-            console.log('Loading Stream: ' + stream_to_load.listenurl)
-            debug('Loading Stream: ' + stream_to_load.listenurl);
+            time_debug('Loading Stream: ' + stream_to_load.listenurl)
             active_stream = stream_to_load.listenurl.substr(stream_to_load.listenurl.lastIndexOf("/") + 1);
 
             cast_api.setMediaPlayback(
@@ -289,52 +277,96 @@ async function loadStream(playbackAddress, currentStream) {
                                 }
                             }
                         } catch (e) {
-                            debug('Error: ' + e);
+                            time_debug('Error: ' + e);
                         }
                     } else {
-                        console.log('null response');
+                        time_debug('null response');
                     }
                 })
                 .catch((e) => {
-                    console.log(e)
+                    time_debug(e)
                 });
         }
     } else {
-        debug('No stream found');
+        time_debug('No stream found');
     }
     return true;
 }
 
 async function getStreamToLoad(currentStream) {
     let response;
-    let stream_to_load;
-
-    try {
-        response = await axios.get(poll_url).then(response => {
-
-            if (response.status === 200) {
-            return response.data;
-        } else {
-            return undefined;
-        }
-    });
-    } catch (e) {
-        debug(e);
+    let stream_to_load = {
+        genre: "Masjid",
+        listenurl: "http://livemasjid.com:8000/" + currentStream['name'],
+        server_description: "Audio stream " + currentStream['name'],
+        server_name: currentStream['name'],
+        server_type: "audio/ogg",
+        server_url: "www.livemasjid.com:8000/" + currentStream['name']
     }
-    if (response !== undefined) {
 
-        forEach(response.icestats.source, availableStream => {
-            let source_url = availableStream.listenurl;
-            let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
-            if (currentStream['name'] === stream_name) {
-                if (stream_to_load === undefined || stream_to_load['priority'] < currentStream['priority']) {
-                    stream_to_load = Object.assign({}, availableStream);
-                    stream_to_load['priority'] = currentStream['priority'];
-                }
-            }
-        });
-            console.log('stl',stream_to_load);
-    }
+
+    // try {
+    //     response = await axios.get(poll_url).then(response => {
+
+    //         if (response.status === 200) {
+    //         return response.data;
+    //     } else {
+    //         return undefined;
+    //     }
+    // });
+    // } catch (e) {
+    //     time_debug(e);
+    // }
+    // if (response !== undefined) {
+
+    //     forEach(response.icestats.source, availableStream => {
+    //         let source_url = availableStream.listenurl;
+    //         let stream_name = source_url.substr(source_url.lastIndexOf("/") + 1);
+    //         if (currentStream['name'] === stream_name) {
+    //             if (stream_to_load === undefined || stream_to_load['priority'] < currentStream['priority']) {
+    //                 stream_to_load = Object.assign({}, availableStream);
+    //                 stream_to_load['priority'] = currentStream['priority'];
+    //             }
+    //         }
+    //     });
+    //         time_debug('stl',stream_to_load);
+    // }
 
     return stream_to_load;
 }
+
+
+// Main
+
+
+init_device().then(device => {
+    if (device !== undefined) {
+
+        if (use_mute_interlock) {
+            setInterlockWhenDeviceIsMuted(device.deviceAddress).catch(err => time_debug(err));
+            setInterval(setInterlockWhenDeviceIsMuted.bind(null, device.deviceAddress), mute_interlock_check_interval);
+        }
+
+        let client = mqtt.connect('mqtt://livemasjid.com:1883');
+
+        client.on('connect', function () {
+            for (let i = 0; i < streams.length; i++) {
+                client.subscribe("mounts/" + streams[i].name, function (err) {
+                });
+            }
+        });
+
+        client.on('message', function (topic, message) {
+            handle_message(topic, message.toString(), device);
+        })
+
+
+    } else {
+        time_debug('No devices available');
+	setTimeout(() => {
+		throw new Error("No devices available");
+	}, 5000)
+    }
+}).catch((e) => {
+    time_debug('error',e)
+});
